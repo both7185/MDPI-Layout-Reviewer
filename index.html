@@ -114200,7 +114200,10 @@ function buildModel(files) {
       const rids = [];
       for (const b of d.getElementsByTagNameNS(ANS, 'blip')) { const id = b.getAttributeNS(RNS, 'embed') || b.getAttributeNS(RNS, 'link'); if (id) rids.push(id); }
       for (const v of d.getElementsByTagName('v:imagedata')) { const id = v.getAttributeNS(RNS, 'id'); if (id) rids.push(id); }
-      P.drawings.push({ anchor: !!anchor, inline: !!inline, vml: !anchor && !inline, cx: ext ? Number(ext.getAttribute('cx')) : 0, cy: ext ? Number(ext.getAttribute('cy')) : 0, rids });
+      const ole = d.getElementsByTagNameNS('urn:schemas-microsoft-com:office:office', 'OLEObject')[0];
+      const oleEq = !!ole && /Equation/i.test(ole.getAttribute('ProgID') || '');
+      if (oleEq) P.oleEq = true;
+      P.drawings.push({ anchor: !!anchor, inline: !!inline, vml: !anchor && !inline, cx: ext ? Number(ext.getAttribute('cx')) : 0, cy: ext ? Number(ext.getAttribute('cy')) : 0, rids, oleEq });
     }
     function walk(el, linkStart) {
       for (let c = el.firstChild; c; c = c.nextSibling) {
@@ -114601,7 +114604,7 @@ function runCheck(model, opts) {
   const findings = [];
   let nVarSeen = false;
   const add = (P, s, e, sev, cat, sec, th, en, rule) => {
-    if (!P) return;
+    if (!P || P.inBox) return;
     if (s == null) { [s, e] = trimRange(P); if (e <= s) { s = 0; e = P.text.length; } }
     findings.push({ P, s, e, sev, cat, sec, msg: tx(th, en), rule });
   };
@@ -114660,7 +114663,16 @@ function runCheck(model, opts) {
   /* ---------- 2. classify paragraphs ---------- */
   const textOf = P => P.text.replace(/￼/g, ' ').trim();
   const sname = P => (P.styleName || '').toLowerCase();
-  let iAbs = topParas.findIndex(P => /^abstract\b/i.test(textOf(P)) || /mdpi_1\.7|abstract/.test(sname(P)) && textOf(P));
+  // the editor/dates/copyright box (a one-cell table, anywhere in the file, even after the first heading)
+  const BOX_LINE = /^(Citation|Academic Editors?|Academic Editor\(s\)|Received|Revised|Accepted|Published|Copyright|Publisher[’']s Note)\s*:|^©/i;
+  for (const T of model.tables) if (T.paras.filter(p => BOX_LINE.test(textOf(p))).length >= 2) { T.box = true; T.paras.forEach(p => { p.inBox = true; }); }
+  // a Highlights block before the abstract (a “Highlights” line, its items, up to the “Abstract” line) is not the abstract
+  const isHighlights = P => /^highlights?\s*:?\s*$/i.test(textOf(P));
+  const iHigh0 = topParas.findIndex(isHighlights);
+  const iAbsLbl = iHigh0 >= 0 ? topParas.findIndex((P, i) => i > iHigh0 && /^abstract\b/i.test(textOf(P))) : -1;
+  let iAbs = topParas.findIndex((P, i) => (iAbsLbl < 0 || i < iHigh0 || i >= iAbsLbl) && !isHighlights(P) && (/^abstract\b/i.test(textOf(P)) || /mdpi_1\.7|abstract/.test(sname(P)) && textOf(P)));
+  const iHigh = iHigh0 >= 0 && iHigh0 < iAbs ? iHigh0 : -1;
+  if (iHigh >= 0) for (let i = iHigh; i < iAbs; i++) if (!topParas[i].empty) topParas[i].role = 'highlights';
   let iKey = topParas.findIndex((P, i) => i > iAbs && /^key\s*-?words?\b/i.test(textOf(P)));
   const backMatch = P => {
     let t = textOf(P);
@@ -114677,23 +114689,27 @@ function runCheck(model, opts) {
     return null;
   };
   const mainStartTop = iKey >= 0 ? iKey + 1 : (iAbs >= 0 ? iAbs + 1 : 0);
+  const blockOf = new Map(); blocks.forEach((b, i) => { if (b.kind === 'p') blockOf.set(b.p, i); });
+  const underTable = P => { const bi = blockOf.get(P); if (bi == null) return false; for (let k = bi - 1; k >= 0; k--) { const b = blocks[k]; if (b.kind === 'tbl') return !b.t.box; if (!b.p.empty) return false; } return false; };
+  const isTableFooterLabel = (P, m) => !!m && m.key === 'abbrev' && textOf(P).length > m.len + 3 && !/following abbreviations/i.test(textOf(P)) && underTable(P);
   // first back-matter label after the main text start
   let iBack = -1;
   for (let i = mainStartTop; i < topParas.length; i++) {
     const m = backMatch(topParas[i]);
+    if (isTableFooterLabel(topParas[i], m)) continue;
     if (m && m.key !== 'appendix') { iBack = i; break; }
     if (m && m.key === 'appendix') { iBack = i; break; }
   }
   const frontEnd = iAbs >= 0 ? iAbs : (() => { const h = topParas.findIndex(P => /^1\.?\s+[A-Z]/.test(textOf(P)) || /^introduction$/i.test(textOf(P))); return h >= 0 ? h : 0; })();
 
   // ---- front matter
-  const front = topParas.slice(0, frontEnd).filter(P => !P.empty);
+  const front = topParas.slice(0, frontEnd).filter(P => !P.empty && P.role !== 'highlights');
   let fi = 0;
   const frontRoles = [];
-  const isNorms = t => /^(Citation|Academic Editors?|Received|Revised|Accepted|Published|Copyright|Publisher[’']s Note)\s*:|^©/i.test(t);
+  const isNorms = t => BOX_LINE.test(t);
   for (const P of front) {
     const t = textOf(P);
-    if (isNorms(t)) { P.role = 'norms'; continue; }
+    if (isNorms(t)) { P.role = 'norms'; P.inBox = true; continue; }
     if (/^(running\s+(title|head)|short\s+title)\b/i.test(t)) { P.role = 'running'; continue; }
     frontRoles.push(P);
   }
@@ -114759,7 +114775,10 @@ function runCheck(model, opts) {
         const [s, e] = trimRange(P);
         const bold = allFmt(P, s, e, f => f.b), ital = allFmt(P, s, e, f => f.i);
         if (/^(Introduction|Materials and Methods|Methods|Results|Discussion|Conclusions?|Results and Discussion|Literature Review|Background|Methodology|Related Work)$/i.test(t)) lvl = 1;
-        else if (bold && t.split(/\s+/).length <= 16) lvl = 1;
+        else if (bold && t.split(/\s+/).length <= 16) {
+          if (zone === 'back' || /^[\p{L}][\p{L} ]{0,30}?\s+(\d+|[IVX]+)[a-z]?\s*[:.–—-]\s*\S/u.test(t) || /bullet|itemize|list/.test(nm)) P.boldLabel = zone === 'back' ? 'back' : 'main';
+          else lvl = 1;
+        }
         else if (ital && t.split(/\s+/).length <= 16 && !/[a-z]{3,} [a-z]{3,} [a-z]{3,} [a-z]{3,} [a-z]{3,} [a-z]{3,}/.test('')) lvl = 2;
       }
     }
@@ -114767,21 +114786,50 @@ function runCheck(model, opts) {
     return { lvl: Math.min(lvl, 5), numStr, numbered, manual, title: m && manual ? m[4] : (P.num && numbered ? t : t) };
   };
 
+  // an equation layout table: each row holds an equation (OMML, MathType OLE or a typed formula) and, usually, its label “(n)” in the last cell;
+  // a multi-line equation may leave the label off some rows. Tables with a “Table X.” caption, pictures or ordinary text cells are data tables.
+  const EQ_LABEL = /^\([A-Z]?\d+[a-z]?\)$/;
+  const isEquationTable = (T, blocks, bi) => {
+    if (T.rows.length > 12) return false;
+    for (let k = bi - 1; k >= 0; k--) { const b = blocks[k]; if (b.kind === 'tbl') break; if (b.p.empty) continue; if (b.p.role === 'tab_caption') return false; break; }
+    const cellInfo = c => {
+      const txt = c.paras.map(textOf).join(' ').trim();
+      const math = c.paras.some(p => p.hasMath || p.oleEq);
+      const pic = c.paras.some(p => p.drawings.some(d => !d.oleEq));
+      const empty = c.paras.every(p => p.empty);
+      return { txt, math, pic, empty, lbl: !math && EQ_LABEL.test(txt), typed: !math && txt.length <= 120 && /[=≈≤≥∝<>]/.test(txt) };
+    };
+    const kinds = T.rows.map(r => {
+      const ne = r.map(cellInfo).filter(x => !x.empty);
+      if (!ne.length) return 'blank';
+      if (ne.length > 3 || ne.some(x => x.pic)) return null;
+      const hasLbl = ne[ne.length - 1].lbl, body = hasLbl ? ne.slice(0, -1) : ne;
+      if (body.some(x => x.lbl)) return null;
+      if (!body.length) return 'label';
+      if (!body.every(x => x.math || x.typed || /^[,.;]?$/.test(x.txt.replace(/\s/g, '')))) return null;
+      return hasLbl ? 'label' : body.some(x => x.math) ? 'math' : 'typed';
+    });
+    if (kinds.includes(null)) return false;
+    const used = kinds.filter(k => k !== 'blank');
+    if (!used.length) return false;
+    if (used.includes('label')) return true;
+    if (used.every(k => k === 'math')) return true;
+    return used.length === 1 && T.rows.length === 1;
+  };
   let afterEquation = false;
   for (let bi = 0; bi < blocks.length; bi++) {
     const b = blocks[bi];
     const P0 = b.kind === 'p' ? b.p : b.t.paras[0];
     if (b.kind === 'p' && b.p === mainStartPara) zone = 'main';
     if (b.kind === 'p' && b.p === backStartPara) zone = 'back';
+    if (b.kind === 'tbl' && b.t.box) { b.t.kind = 'box'; b.t.zone = zone; b.t.paras.forEach(P => { P.role = 'norms'; }); continue; }
     if (zone === 'front') { if (b.kind === 'tbl') b.t.paras.forEach(P => { P.role = P.role || 'front_table'; }); continue; }
     if (b.kind === 'tbl') {
       const T = b.t;
-      const isEq = T.hasMath && T.rows.length <= 2 && T.paras.filter(p => !p.empty).every(p => p.hasMath || /^\(?[A-Z]?\d+[a-z]?\)?$/.test(textOf(p)) || p.empty);
-      const ctxt = c => c.paras.map(textOf).join(' ').trim();
-      const isEqLbl = !isEq && T.rows.length >= 1 && T.rows.length <= 8 && T.rows.every(r => { const ne = r.filter(c => ctxt(c)); return ne.length >= 2 && ne.length <= 3 && /^\(\d+[a-z]?\)$/.test(ctxt(ne[ne.length - 1])) && ne.slice(0, -1).some(c => /=|≈|≤|≥|<|>/.test(ctxt(c)) || c.paras.some(p => p.hasMath)); });
-      T.kind = (isEq || isEqLbl) ? 'equation' : (zone === 'back' && backKey === 'abbrev' ? 'abbrev' : 'data');
+      const isEq = isEquationTable(T, blocks, bi);
+      T.kind = isEq ? 'equation' : (zone === 'back' && backKey === 'abbrev' ? 'abbrev' : 'data');
       T.zone = zone; T.backKey = backKey;
-      T.paras.forEach(P => { P.role = isEq ? 'equation_cell' : (T.kind === 'abbrev' ? 'abbrev_cell' : 'table_cell'); });
+      T.paras.forEach(P => { P.role = isEq ? (P.empty || P.hasMath || P.oleEq || EQ_LABEL.test(textOf(P)) ? 'equation_cell' : 'table_cell') : (T.kind === 'abbrev' ? 'abbrev_cell' : 'table_cell'); });
       afterEquation = isEq;
       prevBlock = b; continue;
     }
@@ -114790,7 +114838,7 @@ function runCheck(model, opts) {
     const t = textOf(P);
     if (zone === 'back') {
       const m = backMatch(P);
-      if (m) {
+      if (m && !isTableFooterLabel(P, m)) {
         backKey = m.key; P.backLabel = m; backSeq.push({ ...m, P });
         if (m.key === 'refs') { P.role = 'refs_heading'; continue; }
         if (m.key === 'disclaimer') { P.role = 'disclaimer'; continue; }
@@ -114820,6 +114868,7 @@ function runCheck(model, opts) {
       const h = headingInfo(P);
       if (h && !(P.num && !h.numbered && h.lvl == null)) { P.role = inApp ? 'appendix_heading' : 'heading'; P.head = h; }
       else if (P.num && P.num.label !== undefined && !/heading/.test(sname(P))) P.role = 'list';
+      else if (P.boldLabel) P.role = 'label';
       else if (/quote/i.test(sname(P)) || (cm(P.pp.left) > 5.1 && cm(P.pp.right) > 0.5)) P.role = 'quote';
       else P.role = inApp ? 'appendix_body' : 'body';
       if ((P.role === 'body' || P.role === 'appendix_body') && /^[\p{Ll}]/u.test(t)) P.noIndent = true;
@@ -114833,7 +114882,8 @@ function runCheck(model, opts) {
   const fmtGroups = new Map();
   const roleSpec = P => {
     switch (P.role) {
-      case 'article_type': case 'title': case 'authors': case 'affiliation': case 'corr': case 'frontnote':
+      case 'affiliation': return (/^\s*\d/.test(P.text) || (P.num && P.num.label)) ? SPECS.affiliation : Object.assign({}, SPECS.affiliation, { hanging: undefined });
+      case 'article_type': case 'title': case 'authors': case 'corr': case 'frontnote':
       case 'abstract_title': case 'abstract_body': case 'keywords': case 'pacs':
         return SPECS[P.role === 'pacs' ? 'keywords' : P.role];
       case 'abstract_mixed': return SPECS.abstract_body;
@@ -114846,7 +114896,8 @@ function runCheck(model, opts) {
       case 'figure': { const w = Math.max(...P.drawings.map(d => d.cx)); return w > 4989600 + 40000 ? SPECS.figure_large : SPECS.figure_small; }
       case 'back': return SPECS.back;
       case 'supp': return SPECS.supp;
-      case 'abbrev': case 'abbrev_label': return SPECS.abbrev;
+      case 'abbrev': case 'abbrev_label': return null;
+      case 'label': return P.boldLabel === 'back' ? { label: SPECS.appendix.label, sec: SPECS.appendix.sec, size: 10, rule: SPECS.appendix.rule } : { label: SPECS.body.label, sec: SPECS.body.sec, size: 10, rule: SPECS.body.rule };
       case 'ref': return SPECS.ref;
       case 'disclaimer': return SPECS.disclaimer;
       case 'table_cell': return SPECS.table_cell;
@@ -115202,7 +115253,7 @@ function runCheck(model, opts) {
   const refsOnly = paras.some(P => P.role === 'ref') && !paras.some(P => !P.empty && ['body', 'heading', 'fig_caption', 'tab_caption', 'table_cell', 'abstract_body', 'abstract_mixed', 'title'].includes(P.role));
   const art = paras.find(P => P.role === 'article_type');
   if (art && /type of the paper|\(article, review/i.test(art.text)) add(art, null, null, 'error', 'front', '4.2', 'ยังเป็นข้อความตัวอย่างจากเทมเพลต ต้องเหลือเฉพาะประเภทบทความ เช่น “Article”', 'Template placeholder text — keep only the article type, e.g., “Article”', 'Article Type: For available article types for MDPI papers, see https://i.mdpi.cn/team/committee/guide/214.');
-  if (!art && front.length && !refsOnly) add(front[0], null, null, 'check', 'front', '4.2', 'ไม่พบบรรทัด Article Type (เช่น “Article”) เหนือชื่อเรื่อง', 'No Article Type line (e.g., “Article”) found above the title', 'Article Type: Font size: 10 pt, Italics. Alignment: Left. Spacing: Before: 12 pt; After: 0 pt.');
+  if (!art && front.length && !refsOnly) add(front.find(P => !P.inBox) || front[0], null, null, 'check', 'front', '4.2', 'ไม่พบบรรทัด Article Type (เช่น “Article”) เหนือชื่อเรื่อง', 'No Article Type line (e.g., “Article”) found above the title', 'Article Type: Font size: 10 pt, Italics. Alignment: Left. Spacing: Before: 12 pt; After: 0 pt.');
   const titleP = paras.find(P => P.role === 'title');
   if (titleP) {
     const [s, e] = trimRange(titleP);
@@ -116038,14 +116089,14 @@ function runCheck(model, opts) {
   for (const T of model.tables) {
     if (T.depth > 0) continue;
     const P0 = T.paras.find(p => !p.empty) || T.paras[0];
-    if (!P0 || !P0.role || P0.role === 'front_table') continue;
+    if (!P0 || !P0.role || P0.role === 'front_table' || T.kind === 'box') continue;
     const tblPr = kid(T.el, 'tblPr');
     if (T.kind === 'equation') {
       // equation number cell
       T.rows.forEach(row => row.forEach(cell => cell.paras.forEach(P => {
         const tt = textOf(P);
         if (tt.length > 10 && /[=≈<>≤≥]/.test(tt)) return;
-        if (!P.hasMath && tt && !/^\([A-Z]?\d+[a-z]?\)$/.test(tt)) add(P, null, null, 'error', 'figtab', '6.4', `เลขสมการต้องอยู่ในวงเล็บ เช่น “(1)” (พบ “${tt}”)`, `Equation numbers must be in parentheses, e.g., “(1)” (found “${tt}”)`, 'If the equation is cited in the main text, it should be labeled with an Arabic number with parentheses, e.g., Equation (1).');
+        if (!P.hasMath && !P.oleEq && tt && !/^[,.;]$/.test(tt) && !/^\([A-Z]?\d+[a-z]?\)$/.test(tt)) add(P, null, null, 'error', 'figtab', '6.4', `เลขสมการต้องอยู่ในวงเล็บ เช่น “(1)” (พบ “${tt}”)`, `Equation numbers must be in parentheses, e.g., “(1)” (found “${tt}”)`, 'If the equation is cited in the main text, it should be labeled with an Arabic number with parentheses, e.g., Equation (1).');
       })));
       continue;
     }
@@ -116509,7 +116560,7 @@ function runCheck(model, opts) {
       {
         const hits = { strike: [], color: [], hl: [] };
         paras.forEach(P => {
-          if (P.empty || P.inTable || P.role === 'ref' || ['title', 'running', 'front_other', 'frontnote'].includes(P.role)) return;
+          if (P.empty || P.inTable || P.inBox || P.role === 'ref' || ['title', 'running', 'front_other', 'frontnote'].includes(P.role)) return;
           const got = {};
           for (let i = 0; i < P.text.length; i++) {
             if (!/\S/.test(P.text[i]) || !P.chars[i] || !P.chars[i].r) continue;
