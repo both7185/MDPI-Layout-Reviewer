@@ -1,0 +1,10 @@
+node_modules/
+dist/
+regress-out.json
+
+# Manuscripts are confidential: never commit them
+*.docx
+*.doc
+*.xml
+*.htm
+test-files/
