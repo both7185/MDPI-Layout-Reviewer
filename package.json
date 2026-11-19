@@ -1,0 +1,18 @@
+{
+  "name": "mdpi-layout-reviewer",
+  "version": "52.0.0",
+  "private": true,
+  "description": "Checks Word manuscripts against The MDPI Layout Style Guide and compares Word with JATS XML, in the browser.",
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "node scripts/check.mjs",
+    "regress": "node scripts/regress.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.48.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
