@@ -33,14 +33,15 @@ async function runAll(htmlPath) {
   const files = new Map();
   await page.route('**/*', route => {
     const u = new URL(route.request().url());
-    if (u.host !== 'regress.test') return route.abort();
+    if (u.host !== 'localhost:5917') return route.abort();
     if (u.pathname === '/app.html') return route.fulfill({ body: fs.readFileSync(htmlPath), contentType: 'text/html; charset=utf-8' });
     const f = files.get(decodeURIComponent(u.pathname.slice(3)));
     return f ? route.fulfill({ body: fs.readFileSync(f), contentType: 'application/octet-stream' }) : route.fulfill({ status: 404 });
   });
   const errors = [];
   page.on('pageerror', e => errors.push(String(e)));
-  await page.goto('http://regress.test/app.html');
+  // localhost counts as a secure context, so crypto.subtle works as it does on github.io
+  await page.goto('http://localhost:5917/app.html');
   const out = {};
   for (const j of jobs) {
     const keys = {};
@@ -92,7 +93,9 @@ let bad = 0;
 for (const k of new Set([...Object.keys(expected), ...Object.keys(got)])) {
   const d = diff(expected[k], got[k]);
   const n = got[k]?.findings?.length ?? got[k]?.items?.length;
-  if (d.length) { bad++; console.log(`✗ ${k}\n    ` + d.join('\n    ')); } else console.log(`✓ ${k}${n != null ? ` (${n} findings)` : ''}${got[k]?.error ? ' ERROR in both: ' + got[k].error.split('\n')[0] : ''}`);
+  if (d.length) { bad++; console.log(`✗ ${k}\n    ` + d.join('\n    ')); }
+  else if (got[k]?.error) { bad++; console.log(`✗ ${k}: fails in both builds: ${got[k].error.split('\n')[0]}`); }
+  else console.log(`✓ ${k}${n != null ? ` (${n} findings)` : ''}`);
 }
 console.log(bad ? `\n${bad} job(s) differ` : '\nAll jobs identical');
 process.exit(bad ? 1 : 0);
