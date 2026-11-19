@@ -43,9 +43,7 @@ header.top{display:flex;justify-content:space-between;align-items:flex-end;gap:1
 .logo .ic .pen{stroke:var(--mark)}
 h1{font-family:var(--display);font-weight:600;font-size:clamp(28px,4vw,40px);line-height:1.08;margin:0;letter-spacing:-.01em;text-wrap:balance}
 h1 .pm{color:var(--mark);font-style:italic}
-.lede{margin:8px 0 0;color:var(--ink-2);max-width:66ch;font-size:15px}
 .edition{display:grid;gap:6px;justify-items:end;font-size:13px;color:var(--ink-3)}
-.edition .pill{font-family:var(--mono);font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;background:var(--sheet);color:var(--ink-2)}
 .edition .priv{display:flex;gap:6px;align-items:center}
 .edition .priv .ic{width:15px;height:15px;color:var(--ok)}
 @media (max-width:720px){.edition{justify-items:start}}
