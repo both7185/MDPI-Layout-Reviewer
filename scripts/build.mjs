@@ -21,7 +21,7 @@ export function build() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  const out = path.join(root, process.argv[2] || 'dist/index.html');
+  const out = path.resolve(root, process.argv[2] || 'dist/index.html');
   const { html, used } = build();
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, html);
