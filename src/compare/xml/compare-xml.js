@@ -758,6 +758,15 @@ async function compareXml(docxBuf, xmlText, opts) {
     if (hn !== tn) sPush(l, { kind: 'xstruct', sub: 'extlink', from: t, to: href, xline: xlineOf(l) }, t.length, t);
   });
   allEls.filter(e => e.localName === 'email').forEach(m => { const t = m.textContent.trim(); if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t)) sPush(m, { kind: 'xstruct', sub: 'email', from: t, xline: xlineOf(m) }, t.length, t); });
+  // a group or organisation written as a person (<name><surname>STROBE Initiative</surname></name>, no <given-names>) belongs in <collab>
+  const X_ORG = /\b(Initiative|Group|Organi[sz]ation|Association|Society|Committee|Council|Agency|Institute|Institution|Department|Ministry|Office|Foundation|Consortium|Network|Cent(?:er|re)|Collaborat(?:ion|ive|ors)|Board|Commission|Panel|Team|Task Force|Working Party|Union|University|Bureau|Service|Company|Corporation|Federation|Alliance|Program(?:me)?|Project|Authority|Administration|Registry|Trust|Investigators|Inc|Ltd|LLC|GmbH|Co)\b\.?/;
+  allEls.filter(e => e.localName === 'name' && e.closest && e.closest('ref')).forEach(nm => {
+    const sn = xFirst(nm, 'surname'), gn = xFirst(nm, 'given-names');
+    if (!sn || (gn && gn.textContent.trim())) return;
+    const t = sn.textContent.replace(/\s+/g, ' ').trim();
+    // an organisation word, or an acronym of two letters or more (WHO, STROBE), tells it from a person known by one name
+    if (t && (X_ORG.test(t) || /(?:^|\s)[A-Z][A-Z0-9&-]+(?=\s|$)/.test(t))) sPush(nm, { kind: 'xstruct', sub: 'collab', from: t, xline: xlineOf(nm) }, t.length, t);
+  });
   // funding: award numbers and funders listed in <award-group> appear in the Funding text
   const fgp = meta ? xFirst(meta, 'funding-group') : null;
   if (fgp) {
@@ -903,6 +912,7 @@ async function compareXml(docxBuf, xmlText, opts) {
           case 'graphicid': return tx(`${it.from}: ไฟล์รูป “${it.to}” ไม่ได้ขึ้นต้นด้วยรหัสบทความนี้ (${it.want})`, `${it.from}: the image file “${it.to}” does not start with this article's id (${it.want})`);
           case 'extlink': return tx(`ลิงก์ใน XML แสดง “${it.from}” แต่ชี้ไปที่ “${it.to}”`, `A link in the XML shows “${it.from}” but points to “${it.to}”`);
           case 'email': return tx(`อีเมล “${it.from}” ใน XML รูปแบบไม่ถูกต้อง`, `The email “${it.from}” in the XML is not a valid address`);
+          case 'collab': return tx(`อ้างอิง: “${it.from}” อยู่ใน <name><surname> โดยไม่มี <given-names> จึงถูกอ่านเป็นชื่อคน ชื่อองค์กรหรือกลุ่มให้ใช้ <collab> → <collab>${it.from}</collab>`, `Reference: “${it.from}” is in <name><surname> with no <given-names>, so it reads as a person. A group or organisation name goes in <collab> → <collab>${it.from}</collab>`);
           case 'award': return tx(`Funding: เลขทุน “${it.from}” ใน <award-id> ไม่มีในข้อความ Funding`, `Funding: the award number “${it.from}” in <award-id> is not in the Funding text`);
           case 'funder': return tx(`Funding: ผู้ให้ทุน “${it.from}” ใน <funding-source> ไม่มีในข้อความ Funding`, `Funding: the funder “${it.from}” in <funding-source> is not in the Funding text`);
           case 'char': return tx(`XML มีอักขระที่แสดงเป็นกล่องหรือมองไม่เห็น (${it.from}) ใน “${it.to}”`, `The XML has characters that show as boxes or nothing (${it.from}) in “${it.to}”`);
