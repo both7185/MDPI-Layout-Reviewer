@@ -764,8 +764,10 @@ async function compareXml(docxBuf, xmlText, opts) {
     const sn = xFirst(nm, 'surname'), gn = xFirst(nm, 'given-names');
     if (!sn || (gn && gn.textContent.trim())) return;
     const t = sn.textContent.replace(/\s+/g, ' ').trim();
-    // an organisation word, or an acronym of two letters or more (WHO, STROBE), tells it from a person known by one name
-    if (t && (X_ORG.test(t) || /(?:^|\s)[A-Z][A-Z0-9&-]+(?=\s|$)/.test(t))) sPush(nm, { kind: 'xstruct', sub: 'collab', from: t, xline: xlineOf(nm) }, t.length, t);
+    if (!t) return;
+    // an organisation word, or an acronym of two letters or more (WHO, STROBE): a group, so <collab>; any other surname-only name is shown to check (Both, 2026-11-20), as a person known by one name may stay
+    if (X_ORG.test(t) || /(?:^|\s)[A-Z][A-Z0-9&-]+(?=\s|$)/.test(t)) sPush(nm, { kind: 'xstruct', sub: 'collab', from: t, xline: xlineOf(nm) }, t.length, t);
+    else sPush(nm, { kind: 'xstruct', sub: 'surnameonly', from: t, xline: xlineOf(nm), check: true }, t.length, t);
   });
   // funding: award numbers and funders listed in <award-group> appear in the Funding text
   const fgp = meta ? xFirst(meta, 'funding-group') : null;
@@ -913,6 +915,7 @@ async function compareXml(docxBuf, xmlText, opts) {
           case 'extlink': return tx(`ลิงก์ใน XML แสดง “${it.from}” แต่ชี้ไปที่ “${it.to}”`, `A link in the XML shows “${it.from}” but points to “${it.to}”`);
           case 'email': return tx(`อีเมล “${it.from}” ใน XML รูปแบบไม่ถูกต้อง`, `The email “${it.from}” in the XML is not a valid address`);
           case 'collab': return tx(`อ้างอิง: “${it.from}” อยู่ใน <name><surname> โดยไม่มี <given-names> จึงถูกอ่านเป็นชื่อคน ชื่อองค์กรหรือกลุ่มให้ใช้ <collab> → <collab>${it.from}</collab>`, `Reference: “${it.from}” is in <name><surname> with no <given-names>, so it reads as a person. A group or organisation name goes in <collab> → <collab>${it.from}</collab>`);
+          case 'surnameonly': return tx(`อ้างอิง: “${it.from}” มีแค่ <surname> ไม่มี <given-names> ถ้าเป็นชื่อองค์กร บริษัท หรือกลุ่ม ให้เปลี่ยนเป็น <collab>${it.from}</collab> ถ้าเป็นคนที่มีชื่อเดียวใช้แบบเดิมได้`, `Reference: “${it.from}” has only a <surname>, no <given-names>. If it is a company, group or organisation, use <collab>${it.from}</collab>; a person known by one name can stay as it is`);
           case 'award': return tx(`Funding: เลขทุน “${it.from}” ใน <award-id> ไม่มีในข้อความ Funding`, `Funding: the award number “${it.from}” in <award-id> is not in the Funding text`);
           case 'funder': return tx(`Funding: ผู้ให้ทุน “${it.from}” ใน <funding-source> ไม่มีในข้อความ Funding`, `Funding: the funder “${it.from}” in <funding-source> is not in the Funding text`);
           case 'char': return tx(`XML มีอักขระที่แสดงเป็นกล่องหรือมองไม่เห็น (${it.from}) ใน “${it.to}”`, `The XML has characters that show as boxes or nothing (${it.from}) in “${it.to}”`);
